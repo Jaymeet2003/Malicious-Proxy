@@ -1,5 +1,0 @@
-Extracted Client Information:
-User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0
-Screen Resolution: 1512x982
-Language: en-US
-
