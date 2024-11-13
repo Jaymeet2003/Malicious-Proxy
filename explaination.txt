@@ -1,0 +1,21 @@
+I started by analyzing site requests using Wireshark to determine the format needed for passive logging and then applied regular expressions to log query information, 
+which was straightforward after the analysis. Next, I worked on active injection by appending a script to the page,
+ but the script was ineffective, making debugging difficult, so I set that aside initially. 
+I also created a phishing page that redirected when "example.com" was detected, which worked as intended. 
+Returning to the script issue, I used various resources, including generative AI, 
+to identify that the response's "Content-Length" header might be causing the problem. 
+Comparing saved Wireshark header analysis confirmed that the content length was indeed unchanged, preventing script execution.
+I discovered that updating the "Content-Length" was necessary, and I learned from documentation that I could deflate gzip and use `io` from Bytes to decode and modify the data as needed. 
+Implementing this solution led to the successful execution of the code.
+
+
+
+Resources used:
+
+Knowledge from CS 361, 450 and 468
+https://docs.python.org/3/library/socket.html
+https://docs.python.org/3/library/re.html
+https://docs.python.org/3/library/zlib.html
+https://docs.python.org/3/library/gzip.html
+https://docs.python.org/3/library/urllib.html
+https://docs.python.org/3/library/io.html#io.BytesIO
